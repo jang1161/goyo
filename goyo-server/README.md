@@ -7,31 +7,28 @@ docker-compose up
 backend - http://localhost:8000/docs#/
 AI - http://localhost:8001/docs#/
 
-## System Architecture
+## Server Architecture
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Client Application                      │
-│                     (React Web / Mobile App)                    │
-└────────────┬───────────────────────────────────┬────────────────┘
-             │                                   │
-             │ HTTP/WS (제어)                     │ WebSocket (오디오)
-             │ - 인증                             │ - 실시간 스트림
-             │ - 디바이스 설정                      │
-             │ - ANC 제어                         │
-             ↓                                   ↓
-    ┌─────────────────┐                 ┌──────────────────────┐
-    │ FastAPI Backend │                 │     AI Server        │
-    │  (Port 8000)    │                 │    (Port 8001)       │
-    │                 │                 │                      │
-    │ - JWT Auth      │◄─Redis Pub/Sub─►│ - Audio Stream RX    │
-    │ - Device CRUD   │                 │ - ANC Processing     │
-    │ - Profile API   │  anc:control    │ - Noise Detection    │
-    │ - Statistics    │  anc:result     │ - Signal Generation  │
-    │ - Monitoring    │  device:status  │                      │
-    └────────┬────────┘                 └──────────┬───────────┘
-             │                                     │
-             ↓                                     ↓
-       PostgreSQL                             MQTT Broker
-       (User/Device)                               ↓
-                                               [Speaker]
+┌─────────────────┐
+│   Client App    │  (Captures device mic audio)
+│  (Flutter/Web)  │
+└────┬────────┬───┘
+     │        │
+     │        └──────────────────────────────┐
+     │ HTTP (Auth, Device, Profile)          │ WebSocket (Audio Stream)
+     ↓                                       ↓
+┌─────────────────────┐     Redis Pub/Sub     ┌──────────────────────┐
+│  FastAPI Backend    │◄───────────────────-─►│   AI Server          │
+│  (Port 8000)        │  anc:control          │   (Port 8001)        │
+│                     │  anc:result           │                      │
+│  - Auth (JWT)       │  device:status        │  - Audio Processing  │
+│  - Device CRUD      │                       │  - ANC Algorithm     │
+│  - Profile API      │                       │  - Noise Detection   │
+│  - Metadata Only    │                       │  - Signal Generation │
+└─────────┬───────────┘                       └────────┬─────────────┘
+          │                                            │
+          ↓                                            ↓
+    PostgreSQL                                   MQTT Broker
+    (User/Device Data)                                ↓
+                                                [Wi-Fi Speaker]
 ```
