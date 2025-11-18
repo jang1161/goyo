@@ -5,10 +5,10 @@ import glob
 from sklearn.utils import class_weight
 from tensorflow.keras.callbacks import ModelCheckpoint
 from sklearn.model_selection import train_test_split
+from pathlib import Path
 from custom_layers import YAMNetLayer
 from data_generator import SoundDataGenerator
 
-#오디오파일을 모두 업로드하면 용량문제가 생기기 때문에, 모든 파일에 대한 'path'만 받아옴 (데이터를 RAM에 올리지 않는다.)
 def scan_dataset(dataset_path, class_names):
     file_paths = []
     labels = []
@@ -20,7 +20,9 @@ def scan_dataset(dataset_path, class_names):
             print(f"경고: {class_folder} 폴더를 찾을 수 없습니다. 건너뜁니다.")
             continue
         paths = glob.glob(os.path.join(class_folder, '*.wav')) + \
-                glob.glob(os.path.join(class_folder, '*.mp3'))         # 모든 클래스폴더에서  .wav, .mp3 파일 검색
+                glob.glob(os.path.join(class_folder, '*.mp3')) + \
+                glob.glob(os.path.join(class_folder, '*.m4a')) + \
+                glob.glob(os.path.join(class_folder, '*.aac'))
         file_paths.extend(paths)
         labels.extend([class_index] * len(paths))
         
@@ -29,7 +31,7 @@ def scan_dataset(dataset_path, class_names):
 
 SAMPLE_RATE = 16000
 AUDIO_LENGTH_SAMPLES = 15600 # YAMNet의 윈도우 크기에 맞춘 값 (0.975초)
-DATASET_PATH = '../Dataset/Final_dataset' 
+DATASET_PATH = Path(__file__).resolve().parent.parent / 'Dataset' / 'Final_dataset'
 CLASS_NAMES = [
     'Air_conditioner',
     'Air_plane',
@@ -54,17 +56,17 @@ CLASS_NAMES = [
 ]
 NOISE_CLASSES = len(CLASS_NAMES)
 
-# 수정본, 드롭아웃 포함
 def build_finetuned_model(NOISE_CLASSES):
     inputs = tf.keras.layers.Input(shape=(AUDIO_LENGTH_SAMPLES,), dtype=tf.float32, name='audio_input')
     embeddings = YAMNetLayer()(inputs) 
     flattened_embeddings = tf.keras.layers.Flatten(name='flatten_embeddings')(embeddings)
 
-    x = tf.keras.layers.Dropout(0.5)(flattened_embeddings)  # 훈련 중에 50%의 뉴런을 무작위로 꺼서, 모델이 암기에 의존하지 못하게 함
+    #은닉층
+    x = tf.keras.layers.Dense(256, activation='relu', name='hidden_layer')(flattened_embeddings)
+    x = tf.keras.layers.Dropout(0.3)(x) 
 
     outputs = tf.keras.layers.Dense(NOISE_CLASSES, activation='softmax', name='custom_classifier')(x)
-    
-    model = tf.keras.Model(inputs=inputs, outputs=outputs, name='yamnet_finetuned')
+    model = tf.keras.Model(inputs=inputs, outputs=outputs, name='yamnet_finetuned_v2')
     return model
 
 model = build_finetuned_model(NOISE_CLASSES)

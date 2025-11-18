@@ -40,7 +40,15 @@ class SoundDataGenerator(Sequence):
                 wav_data, _ = librosa.load(file_path, sr=self.sample_rate, mono=True)
                 wav_data, _ = librosa.effects.trim(wav_data, top_db=30) #시작과 끝의 '무음' 구간을 자동으로 잘라냄
                 
-                #실시간 augment
+                if len(wav_data) < self.target_length:
+                    wav_data = np.pad(wav_data, (0, self.target_length - len(wav_data)))
+                else:
+                    max_start_index = len(wav_data) - self.target_length
+                    start_index = np.random.randint(0, max_start_index) if max_start_index > 0 else 0
+                    wav_data = wav_data[start_index : start_index + self.target_length]
+                
+                    
+                #augment
                 if self.augment:
                     if np.random.rand() > 0.5:
                         wav_data = add_noise(wav_data, noise_factor=np.random.uniform(0.001, 0.005))
@@ -49,7 +57,7 @@ class SoundDataGenerator(Sequence):
                     if np.random.rand() > 0.3:
                         wav_data = mask_time(wav_data)
                     if np.random.rand() > 0.7:
-                        wav_data = mask_freq(wav_data, 10)
+                        wav_data = mask_freq(wav_data)
                         
                 if len(wav_data) < self.target_length: #15600보다 짧을 때 zero-padding
                     wav_data = np.pad(wav_data, (0, self.target_length - len(wav_data)))
