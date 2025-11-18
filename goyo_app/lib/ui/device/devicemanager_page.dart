@@ -1,536 +1,326 @@
 import 'package:flutter/material.dart';
+import 'package:goyo_app/data/models/device_models.dart';
+import 'package:goyo_app/data/services/api_service.dart';
+import 'package:goyo_app/ui/device/widget/deviceinfo.dart';
 
-/// Device Manager:
-/// - 마이크/스피커 목록
-/// - 연결/해제
-/// - 입출력 테스트
-/// - 지연(레이턴시) 보정
-/// - 디바이스 추가/삭제
 class DeviceManager extends StatefulWidget {
   const DeviceManager({super.key});
 
   @override
-  State<DeviceManager> createState() => _DeviceManagerTabState();
+  State<DeviceManager> createState() => _DeviceManagerPageState();
 }
 
-class _DeviceManagerTabState extends State<DeviceManager> {
+class _DeviceManagerPageState extends State<DeviceManager> {
+  final ApiService _api = ApiService();
   bool scanning = false;
+  bool _initialLoading = true;
+  List<DeviceDto> _devices = const [];
 
-  final List<AudioDevice> devices = [
-    AudioDevice(
-      id: 'mic-01',
-      name: 'Room Mic',
-      kind: DeviceKind.mic,
-      transport: Transport.wifi,
-      status: DeviceStatus.connected,
-      latencyMs: 28,
-    ),
-    AudioDevice(
-      id: 'spk-01',
-      name: 'Desk Speaker',
-      kind: DeviceKind.spk,
-      transport: Transport.ble,
-      status: DeviceStatus.active,
-      latencyMs: 36,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchDevices();
+  }
+
+  Future<void> _fetchDevices() async {
+    setState(() => _initialLoading = true);
+    try {
+      final items = await _api.getDevices();
+      if (!mounted) return;
+      setState(() => _devices = items);
+    } catch (e) {
+      _showSnack('기기에 접근할 수 없습니다: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _initialLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // 상단 액션: 스캔 + 디바이스 추가
-        Row(
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
           children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: scanning ? null : _scanDevices,
-                icon: scanning
-                    ? const SizedBox(
-                        height: 16,
-                        width: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh),
-                label: Text(scanning ? 'Scanning...' : 'Scan devices'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            OutlinedButton.icon(
-              onPressed: _addDeviceDialog,
-              icon: const Icon(Icons.add),
-              label: const Text('Add device'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-
-        // 디바이스 리스트
-        ...devices.map(
-          (d) => _DeviceTile(
-            device: d,
-            onToggleConnection: () => _toggleConnection(d),
-            onTest: () => _testDevice(d),
-            onCalibrate: () => _calibrateLatency(d),
-            onDelete: () => _deleteDevice(d),
-            onRename: () => _renameDevice(d),
-          ),
-        ),
-        if (devices.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 40),
-            child: Center(
-              child: Column(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Icon(
-                    Icons.speaker_notes_off,
-                    color: cs.onSurfaceVariant,
-                    size: 40,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'No devices found',
-                    style: TextStyle(color: cs.onSurfaceVariant),
+                  TextButton.icon(
+                    onPressed: scanning ? null : _scanDevices,
+                    icon: scanning
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.wifi_tethering),
+                    label: Text(scanning ? 'Scanning...' : 'Scan Wi-Fi'),
                   ),
                 ],
               ),
             ),
-          ),
-      ],
+            const Divider(height: 1),
+            Expanded(
+              child: _initialLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _devices.isEmpty
+                  ? const Center(child: Text('등록된 오디오 디바이스가 없습니다.'))
+                  : ListView.separated(
+                      itemCount: _devices.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, i) {
+                        final d = _devices[i];
+                        final isConn = d.isConnected;
+                        final isMic = d.deviceType.toLowerCase().contains(
+                          'mic',
+                        );
+                        return ListTile(
+                          leading: Icon(
+                            isMic ? Icons.mic : Icons.speaker_outlined,
+                            color: cs.primary,
+                          ),
+                          title: Text(
+                            d.deviceName,
+                            style: const TextStyle(fontSize: 18),
+                          ),
+                          subtitle: Text(
+                            isConn ? 'Connected' : 'Not Connected',
+                            style: TextStyle(
+                              color: isConn ? cs.primary : cs.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.info_outline),
+                            onPressed: () async {
+                              final res = await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => DeviceInfo(device: d),
+                                ),
+                              );
+                              if (res is Map && res['deletedId'] == d.id) {
+                                setState(
+                                  () =>
+                                      _devices.removeWhere((x) => x.id == d.id),
+                                );
+                                _showSnack('Deleted "${d.deviceName}"');
+                              }
+                            },
+                          ),
+                          onTap: () => _handleDeviceTap(d),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Future<void> _scanDevices() async {
     setState(() => scanning = true);
-    await Future.delayed(const Duration(seconds: 1));
-    if (!mounted) return;
-    setState(() => scanning = false);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Scan complete (demo)')));
-  }
+    try {
+      final found = await _api.discoverWifiDevices();
+      if (!mounted) return;
+      final pairedIds = _devices.map((d) => d.deviceId).toSet();
+      final available = found
+          .where((d) => !pairedIds.contains(d.deviceId))
+          .toList();
 
-  void _toggleConnection(AudioDevice d) {
-    setState(() {
-      if (d.status == DeviceStatus.disconnected) {
-        d.status = DeviceStatus.connected;
-      } else {
-        d.status = DeviceStatus.disconnected;
+      if (available.isEmpty) {
+        _showSnack('연결 가능한 Wi-Fi 디바이스를 찾지 못했습니다.');
+        return;
       }
-    });
+
+      final selected = await _showDiscoveryDialog(available);
+      if (selected == null) {
+        _showSnack('연결 가능한 디바이스가 있습니다. 언제든 다시 시도하세요.');
+        return;
+      }
+
+      await _pairDevice(selected);
+    } catch (e) {
+      _showSnack('스캔 중 오류가 발생했습니다: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => scanning = false);
+    }
   }
 
-  Future<void> _testDevice(AudioDevice d) async {
-    await showDialog(
+  Future<void> _pairDevice(DiscoveredDevice device) async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final progress = _buildProgressDialog('Wi-Fi 디바이스와 연결 중입니다...');
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => progress,
+    );
+    try {
+      final paired = await _api.pairDevice(
+        PairDeviceRequest(
+          deviceId: device.deviceId,
+          deviceName: device.deviceName,
+          deviceType: device.deviceType,
+          connectionType: device.connectionType,
+        ),
+      );
+      if (!mounted) return;
+      setState(() {
+        final idx = _devices.indexWhere((d) => d.id == paired.id);
+        if (idx == -1) {
+          _devices = [..._devices, paired];
+        } else {
+          final updated = List<DeviceDto>.from(_devices);
+          updated[idx] = paired;
+          _devices = updated;
+        }
+      });
+      _showSnack('"${paired.deviceName}" Wi-Fi 연결이 완료되었습니다.');
+    } catch (e) {
+      _showSnack('연결에 실패했습니다: $e', isError: true);
+    } finally {
+      if (navigator.canPop()) navigator.pop();
+    }
+  }
+
+  Future<void> _handleDeviceTap(DeviceDto device) async {
+    final wantConnect = !device.isConnected;
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(
-          'Test ${d.kind == DeviceKind.mic ? "microphone" : "speaker"}',
-        ),
+        title: Text(wantConnect ? '디바이스 연결' : '디바이스 연결 해제'),
         content: Text(
-          d.kind == DeviceKind.mic
-              ? '🎙️ Listening for input... (demo)'
-              : '🔊 Playing test tone... (demo)',
+          wantConnect
+              ? 'Wi-Fi로 "${device.deviceName}" 기기를 연결할까요?'
+              : '"${device.deviceName}" 기기의 연결을 해제할까요?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(wantConnect ? '연결' : '해제'),
           ),
         ],
       ),
     );
-  }
 
-  Future<void> _calibrateLatency(AudioDevice d) async {
-    if (d.kind == DeviceKind.mic) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Select a speaker to ping for latency (demo)'),
-        ),
-      );
-      return;
-    }
-    final cs = Theme.of(context).colorScheme;
-    int latency = d.latencyMs ?? 30;
+    if (confirmed != true) return;
 
-    await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setSheet) {
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.speed, color: cs.primary),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Latency calibration',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Estimated latency: $latency ms',
-                  style: TextStyle(color: cs.onSurfaceVariant),
-                ),
-                const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: () async {
-                    setSheet(() {}); // rebuild
-                    await Future.delayed(const Duration(milliseconds: 600));
-                    latency = 20 + (DateTime.now().millisecond % 25); // demo 값
-                    setSheet(() {});
-                  },
-                  icon: const Icon(Icons.adjust),
-                  label: const Text('Measure ping (demo)'),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () {
-                    setState(() => d.latencyMs = latency);
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Saved latency: ${d.latencyMs} ms'),
-                      ),
-                    );
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+    setState(() {
+      final idx = _devices.indexWhere((d) => d.id == device.id);
+      if (idx != -1) {
+        final updatedList = List<DeviceDto>.from(_devices);
+        updatedList[idx] = device.copyWith(isConnected: wantConnect);
+        _devices = updatedList;
+      }
+    });
+    _showSnack(
+      wantConnect
+          ? '"${device.deviceName}"이(가) 연결되었습니다.'
+          : '"${device.deviceName}" 연결을 해제했습니다.',
     );
   }
 
-  Future<void> _addDeviceDialog() async {
-    final nameCtrl = TextEditingController();
-    Transport transport = Transport.wifi;
-    DeviceKind kind = DeviceKind.mic;
-
-    await showModalBottomSheet(
+  Future<DiscoveredDevice?> _showDiscoveryDialog(
+    List<DiscoveredDevice> found,
+  ) async {
+    String? selectedId = found.first.deviceId;
+    return showDialog<DiscoveredDevice>(
       context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => Padding(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 8,
-          bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Device name',
-                hintText: 'e.g., Bedroom Speaker',
-                prefixIcon: Icon(Icons.badge_outlined),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<DeviceKind>(
-                    value: kind,
-                    decoration: const InputDecoration(labelText: 'Kind'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: DeviceKind.mic,
-                        child: Text('Microphone'),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Text('Wi-Fi 디바이스 연결'),
+              content: SizedBox(
+                width: 360,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('연결할 디바이스를 선택하세요.'),
                       ),
-                      DropdownMenuItem(
-                        value: DeviceKind.spk,
-                        child: Text('Speaker'),
-                      ),
+                      const SizedBox(height: 12),
+                      for (final device in found)
+                        RadioListTile<String>(
+                          value: device.deviceId,
+                          groupValue: selectedId,
+                          onChanged: (value) =>
+                              setState(() => selectedId = value),
+                          title: Text(device.deviceName),
+                          subtitle: Text(_buildDiscoverySubtitle(device)),
+                        ),
                     ],
-                    onChanged: (v) => kind = v ?? DeviceKind.mic,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DropdownButtonFormField<Transport>(
-                    value: transport,
-                    decoration: const InputDecoration(labelText: 'Transport'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: Transport.wifi,
-                        child: Text('Wi-Fi'),
-                      ),
-                      DropdownMenuItem(
-                        value: Transport.ble,
-                        child: Text('BLE'),
-                      ),
-                    ],
-                    onChanged: (v) => transport = v ?? Transport.wifi,
-                  ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('취소'),
+                ),
+                FilledButton(
+                  onPressed: selectedId == null
+                      ? null
+                      : () {
+                          final target = found.firstWhere(
+                            (d) => d.deviceId == selectedId,
+                          );
+                          Navigator.pop(context, target);
+                        },
+                  child: const Text('연결'),
                 ),
               ],
-            ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _buildDiscoverySubtitle(DiscoveredDevice device) {
+    final parts = <String>[device.deviceType];
+    if (device.signalStrength != null) {
+      parts.add('${device.signalStrength} dBm');
+    }
+    final ip = device.ipAddress;
+    if (ip != null && ip.isNotEmpty) {
+      parts.add(ip);
+    }
+    return parts.join(' • ');
+  }
+
+  AlertDialog _buildProgressDialog(String message) {
+    return AlertDialog(
+      content: SizedBox(
+        height: 96,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
             const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: () {
-                final name = nameCtrl.text.trim().isEmpty
-                    ? 'New Device'
-                    : nameCtrl.text.trim();
-                setState(() {
-                  devices.add(
-                    AudioDevice(
-                      id: 'dev-${DateTime.now().millisecondsSinceEpoch}',
-                      name: name,
-                      kind: kind,
-                      transport: transport,
-                      status: DeviceStatus.disconnected,
-                      latencyMs: null,
-                    ),
-                  );
-                });
-                Navigator.pop(context);
-              },
-              icon: const Icon(Icons.save_outlined),
-              label: const Text('Add'),
-            ),
+            Text(message),
           ],
         ),
       ),
     );
   }
 
-  void _deleteDevice(AudioDevice d) {
-    setState(() => devices.remove(d));
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Deleted "${d.name}"')));
-  }
-
-  Future<void> _renameDevice(AudioDevice d) async {
-    final ctrl = TextEditingController(text: d.name);
-    await showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Rename device'),
-        content: TextField(
-          controller: ctrl,
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.edit_outlined),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              setState(
-                () => d.name = ctrl.text.trim().isEmpty
-                    ? d.name
-                    : ctrl.text.trim(),
-              );
-              Navigator.pop(context);
-            },
-            child: const Text('Save'),
-          ),
-        ],
+  void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Theme.of(context).colorScheme.error : null,
       ),
     );
   }
-}
-
-/// 개별 디바이스 카드
-class _DeviceTile extends StatelessWidget {
-  final AudioDevice device;
-  final VoidCallback onToggleConnection;
-  final VoidCallback onTest;
-  final VoidCallback onCalibrate;
-  final VoidCallback onDelete;
-  final VoidCallback onRename;
-
-  const _DeviceTile({
-    required this.device,
-    required this.onToggleConnection,
-    required this.onTest,
-    required this.onCalibrate,
-    required this.onDelete,
-    required this.onRename,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: ListTile(
-          leading: CircleAvatar(
-            backgroundColor: cs.primary.withOpacity(.12),
-            child: Icon(
-              device.kind == DeviceKind.mic
-                  ? Icons.mic
-                  : Icons.speaker_outlined,
-              color: cs.primary,
-            ),
-          ),
-          title: Text(
-            device.name,
-            softWrap: false,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Wrap(
-            spacing: 8,
-            runSpacing: 0,
-            children: [
-              _Chip(
-                text: _statusText(device.status),
-                color: _statusColor(cs, device.status),
-              ),
-              _Chip(
-                text: device.transport.name.toUpperCase(),
-                color: cs.secondaryContainer,
-              ),
-              if (device.latencyMs != null)
-                _Chip(
-                  text: '${device.latencyMs} ms',
-                  color: cs.tertiaryContainer,
-                ),
-            ],
-          ),
-          trailing: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.3, // ~화면 절반 정도
-              // 혹은 const BoxConstraints(maxWidth: 180);
-            ),
-            child: Wrap(
-              spacing: 0,
-              runSpacing: 0,
-              alignment: WrapAlignment.end,
-              children: [
-                IconButton(
-                  tooltip: 'Rename',
-                  onPressed: onRename,
-                  icon: const Icon(Icons.edit_outlined),
-                ),
-                IconButton(
-                  tooltip: device.status == DeviceStatus.disconnected
-                      ? 'Connect'
-                      : 'Disconnect',
-                  onPressed: onToggleConnection,
-                  icon: Icon(
-                    device.status == DeviceStatus.disconnected
-                        ? Icons.link
-                        : Icons.link_off,
-                  ),
-                ),
-                IconButton(
-                  tooltip: device.kind == DeviceKind.mic
-                      ? 'Input test'
-                      : 'Output test',
-                  onPressed: onTest,
-                  icon: Icon(
-                    device.kind == DeviceKind.mic
-                        ? Icons.mic_none
-                        : Icons.volume_up_outlined,
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Delete',
-                  onPressed: onDelete,
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _statusText(DeviceStatus s) {
-    switch (s) {
-      case DeviceStatus.connected:
-        return 'Connected';
-      case DeviceStatus.active:
-        return 'Active';
-      case DeviceStatus.disconnected:
-        return 'Disconnected';
-    }
-  }
-
-  Color _statusColor(ColorScheme cs, DeviceStatus s) {
-    switch (s) {
-      case DeviceStatus.connected:
-        return cs.secondaryContainer;
-      case DeviceStatus.active:
-        return cs.primaryContainer;
-      case DeviceStatus.disconnected:
-        return cs.errorContainer;
-    }
-  }
-}
-
-class _Chip extends StatelessWidget {
-  final String text;
-  final Color color;
-  const _Chip({required this.text, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final on = ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-        ? Colors.white
-        : Colors.black.withOpacity(.8);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      margin: const EdgeInsets.only(top: 8),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(text, style: TextStyle(fontSize: 12, color: on)),
-    );
-  }
-}
-
-/// ---- 모델/타입 (UI 더미) ----
-enum DeviceKind { mic, spk }
-
-enum Transport { wifi, ble }
-
-enum DeviceStatus { disconnected, connected, active }
-
-class AudioDevice {
-  String id;
-  String name;
-  DeviceKind kind;
-  Transport transport;
-  DeviceStatus status;
-  int? latencyMs;
-
-  AudioDevice({
-    required this.id,
-    required this.name,
-    required this.kind,
-    required this.transport,
-    required this.status,
-    required this.latencyMs,
-  });
 }
