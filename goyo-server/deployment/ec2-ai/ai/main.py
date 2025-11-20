@@ -11,9 +11,9 @@ import json
 
 from config import settings
 from audio_processor import AudioProcessor
-from redis_client import RedisClient
 from anc_controller import ANCController
 from mqtt_publisher import mqtt_publisher
+from mqtt_subscriber import mqtt_subscriber
 
 # Logging setup
 logging.basicConfig(
@@ -39,7 +39,6 @@ app.add_middleware(
 )
 
 # Global instances
-redis_client = RedisClient()
 audio_processor = AudioProcessor()
 anc_controller = ANCController()
 
@@ -59,13 +58,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ MQTT Publisher connection failed: {e}")
 
-    # Redis 연결
-    await redis_client.connect()
-    logger.info("✅ Redis connected")
-
-    # Redis Pub/Sub 리스너 시작 (제어 명령용)
-    asyncio.create_task(redis_audio_listener())
-    logger.info("✅ Redis control listener started")
+    # MQTT Subscriber 연결 및 핸들러 등록
+    try:
+        mqtt_subscriber.set_reference_handler(handle_reference_audio)
+        mqtt_subscriber.set_error_handler(handle_error_audio)
+        mqtt_subscriber.set_control_handler(handle_anc_control)
+        mqtt_subscriber.connect()
+        logger.info("✅ MQTT Subscriber connected")
+    except Exception as e:
+        logger.error(f"❌ MQTT Subscriber connection failed: {e}")
 
     # Audio Processor 초기화
     audio_processor.initialize()
@@ -86,111 +87,86 @@ async def shutdown_event():
     except Exception as e:
         logger.error(f"❌ MQTT Publisher disconnect error: {e}")
 
-    await redis_client.disconnect()
+    # MQTT Subscriber 연결 해제
+    try:
+        mqtt_subscriber.disconnect()
+        logger.info("✅ MQTT Subscriber disconnected")
+    except Exception as e:
+        logger.error(f"❌ MQTT Subscriber disconnect error: {e}")
+
     audio_processor.cleanup()
-    
+
     logger.info("✅ Cleanup complete")
 
 
-async def redis_audio_listener():
-    """Redis Pub/Sub으로 오디오 데이터 수신"""
-    pubsub = redis_client.client.pubsub()
-    
-    # 채널 구독
-    await pubsub.subscribe(
-        "audio:source",
-        "audio:reference",
-        "anc:control"
-    )
-    
-    logger.info("📡 Listening to Redis channels: audio:source, audio:reference, anc:control")
-    
-    try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            
-            channel = message["channel"].decode()
-            data = json.loads(message["data"])
-            
-            if channel == "audio:source":
-                # Source 마이크 데이터 처리
-                await handle_source_audio(data)
-                
-            elif channel == "audio:reference":
-                # Reference 마이크 데이터 처리
-                await handle_reference_audio(data)
-                
-            elif channel == "anc:control":
-                # ANC 제어 명령
-                await handle_anc_control(data)
-                
-    except Exception as e:
-        logger.error(f"❌ Redis listener error: {e}")
-
-
-async def handle_source_audio(data: dict):
-    """Source 마이크 오디오 처리"""
+def handle_reference_audio(data: dict):
+    """Reference 마이크 오디오 처리 (MQTT 콜백)"""
     try:
         user_id = data.get("user_id")
         audio_chunk = data.get("audio_data")  # base64 encoded
         timestamp = data.get("timestamp")
-        
+
         # Audio Processor에 전달
-        audio_processor.process_source(user_id, audio_chunk, timestamp)
-        
+        audio_processor.process_reference(user_id, audio_chunk, timestamp)
+
+        logger.debug(f"✅ Reference audio processed for user {user_id}")
+
     except Exception as e:
-        logger.error(f"❌ Source audio processing error: {e}")
+        logger.error(f"❌ Reference audio processing error: {e}")
 
 
-async def handle_reference_audio(data: dict):
-    """Reference 마이크 오디오 처리"""
+def handle_error_audio(data: dict):
+    """Error 마이크 오디오 처리 (MQTT 콜백)"""
     try:
         user_id = data.get("user_id")
         audio_chunk = data.get("audio_data")
         timestamp = data.get("timestamp")
-        
+
         # Audio Processor에 전달
-        audio_processor.process_reference(user_id, audio_chunk, timestamp)
-        
+        audio_processor.process_error(user_id, audio_chunk, timestamp)
+
         # 두 마이크 데이터가 모두 준비되면 ANC 처리
         if audio_processor.is_ready(user_id):
-            await process_anc(user_id)
-        
+            # 동기 함수에서 비동기 처리
+            asyncio.create_task(process_anc(user_id))
+
+        logger.debug(f"✅ Error audio processed for user {user_id}")
+
     except Exception as e:
-        logger.error(f"❌ Reference audio processing error: {e}")
+        logger.error(f"❌ Error audio processing error: {e}")
 
 
 async def process_anc(user_id: str):
     """ANC 신호 생성 및 전송"""
     try:
         # 1. 두 마이크 데이터 가져오기
-        source_data = audio_processor.get_source_buffer(user_id)
         reference_data = audio_processor.get_reference_buffer(user_id)
-        
+        error_data = audio_processor.get_error_buffer(user_id)
+
         # 2. 노이즈 분류 (Phase 5에서 구현 예정)
-        # noise_type = noise_classifier.classify(source_data)
-        
+        # noise_type = noise_classifier.classify(reference_data)
+
         # 3. 공간 전달 함수 계산 (Phase 5에서 구현 예정)
-        # transfer_function = calculate_transfer_function(source_data, reference_data)
-        
+        # transfer_function = calculate_transfer_function(reference_data, error_data)
+
         # 4. ANC 신호 생성 (현재는 기본 역위상 신호)
         anti_noise_signal = anc_controller.generate_anti_noise(
-            source_data, 
-            reference_data
+            reference_data,
+            error_data,
+            user_id
         )
-        
+
         # 5. MQTT로 스피커에 전송
         await publish_to_speaker(user_id, anti_noise_signal)
-        
+
         # 6. 결과를 Backend에 전송 (모니터링용)
         await publish_anc_result(user_id, {
             "timestamp": audio_processor.get_timestamp(),
-            "noise_level_db": audio_processor.calculate_noise_level(source_data),
+            "noise_level_db": audio_processor.calculate_noise_level(reference_data),
             "reduction_db": -15.2,  # 실제 계산 필요
             "status": "active"
         })
-        
+
     except Exception as e:
         logger.error(f"❌ ANC processing error: {e}")
 
@@ -229,26 +205,40 @@ async def publish_anc_result(user_id: str, result: dict):
         logger.error(f"❌ Result publish error: {e}")
 
 
-async def handle_anc_control(data: dict):
-    """ANC 제어 명령 처리"""
+def handle_anc_control(data: dict):
+    """ANC 제어 명령 처리 (MQTT 콜백)"""
     try:
         user_id = data.get("user_id")
         command = data.get("command")  # "start", "stop", "adjust"
+        device_type = data.get("device_type", "unknown")
         params = data.get("params", {})
-        
+
         if command == "start":
+            logger.info(f"▶️  ANC START command received")
+            logger.info(f"   User: {user_id}, Device: {device_type}")
+
+            # ANC 파이프라인 활성화
             anc_controller.start(user_id)
-            logger.info(f"▶️  ANC started for user {user_id}")
-            
+
+            # Audio Processor 세션 활성화 (필요 시)
+            if hasattr(audio_processor, 'activate_session'):
+                audio_processor.activate_session(user_id)
+
+            logger.info(f"✅ ANC pipeline activated for user {user_id}")
+
         elif command == "stop":
+            logger.info(f"⏹️  ANC STOP command received for user {user_id}")
             anc_controller.stop(user_id)
-            logger.info(f"⏹️  ANC stopped for user {user_id}")
-            
+
+            # Audio Processor 세션 비활성화
+            if hasattr(audio_processor, 'deactivate_session'):
+                audio_processor.deactivate_session(user_id)
+
         elif command == "adjust":
             suppression_level = params.get("suppression_level", 80)
             anc_controller.adjust(user_id, suppression_level)
             logger.info(f"🔧 ANC adjusted: {suppression_level}%")
-        
+
     except Exception as e:
         logger.error(f"❌ ANC control error: {e}")
 
@@ -268,7 +258,8 @@ async def health_check():
     """상세 헬스 체크"""
     return {
         "status": "healthy",
-        "redis": redis_client.is_connected(),
+        "mqtt_subscriber": mqtt_subscriber.is_connected,
+        "mqtt_publisher": mqtt_publisher.is_connected,
         "audio_processor": audio_processor.is_initialized(),
         "active_sessions": len(audio_processor.active_sessions)
     }

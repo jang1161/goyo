@@ -45,8 +45,8 @@ class ANCController:
     
     def generate_anti_noise(
         self,
-        source_data: np.ndarray,
         reference_data: np.ndarray,
+        error_data: np.ndarray,
         user_id: Optional[str] = None
     ) -> np.ndarray:
         """
@@ -54,6 +54,11 @@ class ANCController:
 
         Phase 3.5: 기본 역위상 신호
         Phase 5: FxLMS 적응 필터, 공간 전달 함수 적용
+
+        Args:
+            reference_data: Reference 마이크 데이터 (노이즈 소스)
+            error_data: Error 마이크 데이터 (귀 근처 잔여 노이즈)
+            user_id: 사용자 ID
 
         Returns:
             안티노이즈 신호 (float32, -1.0 ~ 1.0)
@@ -65,18 +70,18 @@ class ANCController:
             suppression = self.suppression_levels.get(user_id, 80) / 100.0
 
             # Int16 → Float32 변환
-            source_float = source_data.astype(np.float32) / 32768.0
+            reference_float = reference_data.astype(np.float32) / 32768.0
 
             # 기본 역위상 신호 생성 (180도 위상 반전)
-            anti_noise = -source_float * suppression
+            anti_noise = -reference_float * suppression
 
             # Phase 5에서 구현 예정:
             # 1. 공간 전달 함수 적용
-            # transfer_function = self.calculate_transfer_function(source_data, reference_data)
+            # transfer_function = self.calculate_transfer_function(reference_data, error_data)
             # anti_noise = self.apply_transfer_function(anti_noise, transfer_function)
 
-            # 2. FxLMS 적응 필터
-            # anti_noise = self.fxlms_filter(anti_noise, reference_data)
+            # 2. FxLMS 적응 필터 (error_data를 활용한 적응 제어)
+            # anti_noise = self.fxlms_filter(anti_noise, error_data)
 
             # 3. 딜레이 보상
             # anti_noise = self.compensate_delay(anti_noise, estimated_delay)
@@ -93,8 +98,8 @@ class ANCController:
                 )
 
                 # ANC 결과도 Backend에 전송 (모니터링용)
-                noise_level = self.calculate_noise_level(source_data)
-                reduction = self.calculate_reduction(source_data, reference_data)
+                noise_level = self.calculate_noise_level(reference_data)
+                reduction = self.calculate_reduction(reference_data, error_data)
                 mqtt_publisher.publish_anc_result(
                     user_id=user_id,
                     noise_level_db=noise_level,
@@ -107,20 +112,20 @@ class ANCController:
         except Exception as e:
             logger.error(f"❌ Anti-noise generation error: {e}", exc_info=True)
             # 에러 시 무음 반환
-            return np.zeros(len(source_data), dtype=np.float32)
+            return np.zeros(len(reference_data), dtype=np.float32)
     
-    def calculate_noise_level(self, source_data: np.ndarray) -> float:
+    def calculate_noise_level(self, reference_data: np.ndarray) -> float:
         """
         노이즈 레벨 계산 (dB SPL)
 
         Args:
-            source_data: Source 마이크 데이터 (int16)
+            reference_data: Reference 마이크 데이터 (int16)
 
         Returns:
             노이즈 레벨 (dB)
         """
         try:
-            rms = np.sqrt(np.mean(source_data.astype(np.float32) ** 2))
+            rms = np.sqrt(np.mean(reference_data.astype(np.float32) ** 2))
             db = 20 * np.log10(rms / 32768.0) if rms > 0 else -100
             return float(db)
         except Exception as e:
@@ -129,24 +134,31 @@ class ANCController:
 
     def calculate_reduction(
         self,
-        source_data: np.ndarray,
-        reference_data: np.ndarray
+        reference_data: np.ndarray,
+        error_data: np.ndarray
     ) -> float:
         """
         노이즈 감소량 계산 (dB)
-        Phase 5에서 정확한 측정 구현
+        Reference 마이크 (원본 소음)와 Error 마이크 (잔여 소음) 비교
+
+        Args:
+            reference_data: Reference 마이크 데이터 (원본 소음)
+            error_data: Error 마이크 데이터 (ANC 적용 후 잔여 소음)
+
+        Returns:
+            노이즈 감소량 (dB)
         """
         try:
-            # Source 레벨
-            source_rms = np.sqrt(np.mean(source_data.astype(np.float32) ** 2))
-            source_db = 20 * np.log10(source_rms / 32768.0) if source_rms > 0 else -100
-
-            # Reference 레벨 (ANC 적용 후)
+            # Reference 레벨 (원본 소음)
             ref_rms = np.sqrt(np.mean(reference_data.astype(np.float32) ** 2))
             ref_db = 20 * np.log10(ref_rms / 32768.0) if ref_rms > 0 else -100
 
-            # 감소량
-            reduction = source_db - ref_db
+            # Error 레벨 (ANC 적용 후 잔여 소음)
+            error_rms = np.sqrt(np.mean(error_data.astype(np.float32) ** 2))
+            error_db = 20 * np.log10(error_rms / 32768.0) if error_rms > 0 else -100
+
+            # 감소량 (양수일수록 효과적)
+            reduction = ref_db - error_db
 
             return float(reduction)
 
