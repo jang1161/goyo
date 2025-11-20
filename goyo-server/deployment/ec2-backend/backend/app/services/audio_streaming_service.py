@@ -22,8 +22,8 @@ class AudioStreamingService:
 
     def __init__(self):
         self.p = pyaudio.PyAudio()
-        self.sample_rate = 44100
-        self.chunk_size = 4096  # 프레임당 샘플 수
+        self.sample_rate = 16000  # AI 요구사항: 16kHz
+        self.chunk_size = 16000  # 1초 = 16000 샘플 @ 16kHz
         self.format = pyaudio.paInt16
 
         # 스트리밍 상태

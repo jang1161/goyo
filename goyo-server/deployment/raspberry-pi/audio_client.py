@@ -39,9 +39,9 @@ class Config:
     USER_ID: str = "1"  # ⚠️ Backend에서 생성한 사용자 ID
 
     # 오디오 설정
-    SAMPLE_RATE: int = 44100
+    SAMPLE_RATE: int = 16000  # AI 요구사항: 16kHz
     CHANNELS: int = 1  # Mono
-    CHUNK_SIZE: int = 1024
+    CHUNK_SIZE: int = 16000  # 1초 = 16000 샘플 @ 16kHz
     FORMAT: int = pyaudio.paInt16
 
     # 마이크 디바이스 인덱스 (arecord -l로 확인)

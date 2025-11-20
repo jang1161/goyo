@@ -35,16 +35,35 @@ class AudioBuffer:
         if not self.buffer:
             return np.array([])
         return np.concatenate(list(self.buffer))
-    
+
+    def get_chunks(self, num_chunks: int) -> Optional[np.ndarray]:
+        """
+        최근 N개의 청크를 (num_chunks, chunk_size) 형태로 반환
+
+        Args:
+            num_chunks: 가져올 청크 개수 (예: 5)
+
+        Returns:
+            (num_chunks, chunk_size) 형태의 numpy array 또는 None
+        """
+        if len(self.buffer) < num_chunks:
+            return None
+
+        # 최근 num_chunks개의 청크 가져오기
+        recent_chunks = list(self.buffer)[-num_chunks:]
+
+        # (num_chunks, chunk_size) 형태로 stack
+        return np.stack(recent_chunks, axis=0)
+
     def clear(self):
         """버퍼 초기화"""
         self.buffer.clear()
         self.timestamps.clear()
-    
+
     def is_empty(self) -> bool:
         """버퍼 비어있는지 확인"""
         return len(self.buffer) == 0
-    
+
     def size(self) -> int:
         """버퍼 크기"""
         return len(self.buffer)
@@ -95,8 +114,9 @@ class AudioProcessor:
             # Base64 디코딩
             audio_bytes = base64.b64decode(audio_data)
 
-            # NumPy 배열로 변환
-            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+            # NumPy 배열로 변환 (Int16 -> Float32, 정규화 -1.0 ~ 1.0)
+            audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+            audio_array = audio_array / 32768.0  # Int16 최대값으로 나눠서 정규화
 
             # 버퍼에 추가
             reference_buffer, _ = self._get_or_create_buffers(user_id)
@@ -113,8 +133,9 @@ class AudioProcessor:
             # Base64 디코딩
             audio_bytes = base64.b64decode(audio_data)
 
-            # NumPy 배열로 변환
-            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+            # NumPy 배열로 변환 (Int16 -> Float32, 정규화 -1.0 ~ 1.0)
+            audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+            audio_array = audio_array / 32768.0  # Int16 최대값으로 나눠서 정규화
 
             # 버퍼에 추가
             _, error_buffer = self._get_or_create_buffers(user_id)
@@ -147,7 +168,57 @@ class AudioProcessor:
         if user_id in self.error_buffers:
             return self.error_buffers[user_id].get_latest()
         return None
-    
+
+    def get_reference_chunks(self, user_id: str, num_chunks: int = 5) -> Optional[np.ndarray]:
+        """
+        Reference 마이크의 최근 N개 청크를 (num_chunks, 16000) 형태로 반환
+
+        Args:
+            user_id: 사용자 ID
+            num_chunks: 가져올 청크 개수 (기본값: 5)
+
+        Returns:
+            (num_chunks, 16000) 형태의 Float32 numpy array 또는 None
+        """
+        if user_id in self.reference_buffers:
+            return self.reference_buffers[user_id].get_chunks(num_chunks)
+        return None
+
+    def get_error_chunks(self, user_id: str, num_chunks: int = 5) -> Optional[np.ndarray]:
+        """
+        Error 마이크의 최근 N개 청크를 (num_chunks, 16000) 형태로 반환
+
+        Args:
+            user_id: 사용자 ID
+            num_chunks: 가져올 청크 개수 (기본값: 5)
+
+        Returns:
+            (num_chunks, 16000) 형태의 Float32 numpy array 또는 None
+        """
+        if user_id in self.error_buffers:
+            return self.error_buffers[user_id].get_chunks(num_chunks)
+        return None
+
+    def is_chunks_ready(self, user_id: str, num_chunks: int = 5) -> bool:
+        """
+        N개의 청크가 모두 준비되었는지 확인
+
+        Args:
+            user_id: 사용자 ID
+            num_chunks: 필요한 청크 개수 (기본값: 5)
+
+        Returns:
+            True if both buffers have at least num_chunks
+        """
+        if user_id not in self.reference_buffers:
+            return False
+
+        reference_buffer = self.reference_buffers[user_id]
+        error_buffer = self.error_buffers[user_id]
+
+        return (reference_buffer.size() >= num_chunks and
+                error_buffer.size() >= num_chunks)
+
     def calculate_noise_level(self, audio_data: np.ndarray) -> float:
         """노이즈 레벨 계산 (dB SPL)"""
         try:
