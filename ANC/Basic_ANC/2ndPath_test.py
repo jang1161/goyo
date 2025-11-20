@@ -13,9 +13,7 @@ import numpy as np
 
 from .session_utils import create_controller
 
-# ---------------------------------------------------------------------------
 # Configuration
-# ---------------------------------------------------------------------------
 REFERENCE_PATH = "src/sine_200Hz.wav"
 OUTPUT_PATH = Path(__file__).resolve().parent / "secondary_path.npy"
 
@@ -27,9 +25,6 @@ DURATION = 3.0                 # Seconds of white-noise excitation per measureme
 EXCITATION_LEVEL = 0.12        # Amplitude of the injected white noise
 FIR_LENGTH = 256               # Number of taps to solve for
 AVERAGE_COUNT = 5              # Number of repeated measurements to average
-
-# ---------------------------------------------------------------------------
-
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
