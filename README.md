@@ -2,6 +2,7 @@
 ### An AI-Based Active Noise Control System for Smart Home Environments
 [GOYO System Documentation (PDF)](./documents/GOYO.pdf)
 Overleaf: https://www.overleaf.com/project/68e73724816bcff0466a2dff
+
 ---
 
 ## Proposal
